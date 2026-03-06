@@ -158,7 +158,8 @@ Host Workspace (not mounted)      Network (disabled)
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams and explanations.
 
 ## Network Proxy
-## This demonstrate speperate network control plane for limitting network / remote tool / mcp / data access. Although inconconvient, it is the last line of defense from a advasarial agent trying to form command and control or data exfiltration. 
+
+### This demonstrate speperate network control plane for limitting network / remote tool / mcp / data access. Although inconconvient, it is the last line of defense from a advasarial agent trying to form command and control or data exfiltration. 
 ### In reality, in this squid use case, the developer or developer local system agent/copilot could modify or remove this security. It is meant to illustrate a concept, not be a production solution. 
 
 ### Network Access
