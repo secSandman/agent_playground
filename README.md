@@ -62,9 +62,38 @@ python opencode_run.py --workspace ".\test-workspace" --dev-mode --no-rebuild --
 python claudecode_run.py --workspace ".\test-workspace" --dev-mode --no-rebuild --provider openai --strict --apparmor restricted --prompt "hello"
 ```
 
-Hardened "Sort-Of" Docker container for running OpenCode CLI with network policy enforcement and filesystem isolation.
+## What This Is (and What It Isn't)
 
-# Run OpenCode on your project
+Welcome to an early-stage **agent security playground** — part cyber range, part duct-taped lab, part "let's see what breaks first."
+
+The goal is to prototype layered controls that can reduce risk from rogue or prompt-injected AI agents:
+
+- Isolate agent runtime from your local host where possible
+- Avoid handing full local and Vault credentials directly to Agents
+- Fetch secrets on host and inject only required values at runtime
+- Add a quasi out-of-band network control plane (`squid-proxy`) to reduce C2/exfil and untrusted package fetch risk
+- Harden agent behavior with restrictive tool settings, denied command/file patterns, AppArmor profiles, non-root users, and dropped Linux capabilities
+- Use Docker isolation as a blast-radius limiter if an agent session goes sideways
+
+**Reality check:** this is not perfect, and it is not a silver bullet.
+
+Most security research points to stronger controls than app-level policy alone:
+- No tool access for untrusted tasks whenever possible
+- Kernel-level execution/network enforcement and allow-listing
+- Out-of-band controls that cannot be overridden by the local agent runtime
+
+Examples worth studying:
+- **[NONO](https://github.com/always-further/nono)**: open-source deny-first command-control patterns that reduce unsafe shell execution paths
+- **[Veto](https://ona.com/stories/introducing-veto-security-for-the-next-era-of-software)**: content-addressable execution enforcement (hash-based identity at kernel layer)
+
+Additional practical guidance (NVIDIA AI Red Team):
+- https://developer.nvidia.com/blog/practical-security-guidance-for-sandboxing-agentic-workflows-and-managing-execution-risk/
+
+With that in mind, this repo is intentionally a **playground** to build, test, and prototype practical security concepts before production hardening.
+
+## Run OpenCode on your project
+
+```bash
 chmod +x start-opencode.sh
 ./start-opencode.sh /path/to/your/project
 ```
