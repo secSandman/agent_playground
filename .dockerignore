@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+LICENSE
+
+# Scripts (not needed in image)
+*.ps1
+*.sh
+docker-compose.yml
+
+# Logs
+*.log
+
+# Test files
+test-*
+*-test.tar.gz
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Squid proxy directory (built separately)
+squid-proxy/

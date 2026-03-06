@@ -1,0 +1,286 @@
+OPENCODE — DOCKER CONTAINER SANDBOX INSTRUCTIONS
+Step-by-step guide to install and run OpenCode in an isolated container
+March 2026
+===========================================================================
+
+OVERVIEW
+--------
+Running OpenCode inside a Docker container limits what it can access on your
+host system. Even if OpenCode is compromised or behaves unexpectedly, the damage
+is contained to the sandbox. Docker Desktop 4.50+ includes native sandbox support
+for OpenCode. Both methods (native sandbox and manual Dockerfile) are covered below.
+
+NOTE: Docker Desktop 4.50 or later is required for Method 1.
+      Docker Engine or Docker Desktop is required for Method 2.
+
+
+===========================================================================
+METHOD 1: DOCKER NATIVE SANDBOX (Simplest — Recommended for most users)
+===========================================================================
+
+Docker natively supports OpenCode sandboxes as of Docker Desktop 4.50.
+This is the quickest path to a sandboxed environment.
+
+PREREQUISITES
+- Docker Desktop 4.50 or later installed
+- An active OpenCode account and API keys for your chosen LLM provider
+
+STEP 1 — Set your API keys in your shell configuration file
+  Add these to ~/.bashrc, ~/.zshrc, or equivalent so Docker can read them.
+  Only set the keys for providers you intend to use.
+
+  export ANTHROPIC_API_KEY=your-key-here
+  export OPENAI_API_KEY=your-key-here
+  export GOOGLE_API_KEY=your-key-here
+
+  After editing, reload your shell:
+  source ~/.bashrc    (or source ~/.zshrc)
+
+STEP 2 — Create the sandbox pointing to your project directory
+  Navigate to the project folder you want OpenCode to work in, then run:
+
+  docker sandbox create opencode /path/to/your/project
+
+  This mounts your project directory inside the sandbox. OpenCode can only
+  see and modify files within that path. The rest of your filesystem is
+  not accessible.
+
+  To mount an additional directory as read-only (e.g., reference docs):
+  docker sandbox create opencode /path/to/your/project /path/to/docs:ro
+
+STEP 3 — Start the sandbox
+  docker sandbox run opencode
+
+  OpenCode will launch inside the container with your project mounted and
+  your API credentials injected via the proxy. No credentials are stored
+  inside the container.
+
+STEP 4 — Verify isolation
+  From inside OpenCode, it should only be able to list and modify files
+  within the mounted project directory. It cannot reach your home directory,
+  SSH keys, or other system files.
+
+
+===========================================================================
+METHOD 2: MANUAL DOCKERFILE BUILD (More control — recommended for security research)
+===========================================================================
+
+This method gives you full control over what goes into the image, what
+network access is permitted, and what files are visible.
+
+PREREQUISITES
+- Docker Engine or Docker Desktop installed
+- curl available on the host
+- API keys for your chosen LLM provider
+
+STEP 1 — Create a working directory
+  mkdir opencode-sandbox
+  cd opencode-sandbox
+
+STEP 2 — Create the Dockerfile
+  Create a file named exactly "Dockerfile" with the following content.
+  This uses Ubuntu as a minimal base and installs OpenCode using its
+  official install script.
+
+  ---- BEGIN DOCKERFILE ----
+  FROM ubuntu:24.04
+
+  # Prevent interactive prompts during package install
+  ENV DEBIAN_FRONTEND=noninteractive
+
+  # Install minimal dependencies
+  RUN apt-get update && apt-get install -y \
+      curl \
+      git \
+      ca-certificates \
+      && rm -rf /var/lib/apt/lists/*
+
+  # Create a non-root user for running OpenCode
+  RUN useradd -m -s /bin/bash opencodeuser
+
+  # Switch to non-root user
+  USER opencodeuser
+  WORKDIR /home/opencodeuser
+
+  # Install OpenCode via the official installer
+  RUN curl -fsSL https://opencode.ai/install | bash
+
+  # Add OpenCode binary to PATH
+  ENV PATH="/home/opencodeuser/.local/bin:${PATH}"
+
+  # Default working directory for projects
+  RUN mkdir -p /home/opencodeuser/workspace
+
+  WORKDIR /home/opencodeuser/workspace
+
+  ENTRYPOINT ["opencode"]
+  ---- END DOCKERFILE ----
+
+STEP 3 — Build the image
+  From inside the opencode-sandbox directory, run:
+
+  docker build -t opencode-sandbox .
+
+  This may take a few minutes on first build. Docker will cache layers
+  so subsequent builds are faster.
+
+STEP 4 — Authenticate OpenCode on your host first
+  Before running the container, authenticate OpenCode on your host machine
+  once so the auth token is created:
+
+  opencode auth login
+
+  This creates a credential file at:
+    Linux/macOS:  ~/.local/share/opencode/auth.json
+
+  This file will be mounted read-only into the container. Your credentials
+  never live inside the image itself.
+
+STEP 5 — Run the container with security restrictions
+  Run the following command, replacing /path/to/your/project with your
+  actual project directory:
+
+  docker run -it --rm \
+    --name opencode-session \
+    --network host \
+    --security-opt no-new-privileges \
+    -v /path/to/your/project:/home/opencodeuser/workspace \
+    -v "$HOME/.local/share/opencode/auth.json":/home/opencodeuser/.local/share/opencode/auth.json:ro \
+    -v "$HOME/.config/opencode":/home/opencodeuser/.config/opencode:ro \
+    -e ANTHROPIC_API_KEY \
+    opencode-sandbox
+
+  FLAG EXPLANATIONS:
+  --rm                       Deletes the container when you exit (no lingering state)
+  --name opencode-session    Names the container for easy reference
+  --network host             Allows API calls to reach LLM providers
+  --security-opt no-new-privileges  Prevents privilege escalation inside container
+  -v project:workspace       Mounts your project — OpenCode can only touch this folder
+  -v auth.json:ro            Mounts credentials as read-only — container cannot modify them
+  -v config:ro               Mounts your OpenCode config as read-only
+  -e ANTHROPIC_API_KEY       Passes API key from host environment — key is never baked in
+
+STEP 6 — Optional: Restrict network access further
+  If you want to fully cut off outbound network except for specific LLM
+  provider endpoints, replace "--network host" with a custom Docker network:
+
+  docker network create --driver bridge opencode-net
+
+  Then replace "--network host" with "--network opencode-net" in the run
+  command above. Note: with a bridge network, you may need to configure
+  your DNS and proxy settings depending on your environment.
+
+  For maximum isolation (no network at all, useful for offline/local models):
+  Replace "--network host" with "--network none"
+
+
+===========================================================================
+SECURITY HARDENING — ADDITIONAL FLAGS
+===========================================================================
+
+These flags can be added to the docker run command for additional hardening.
+They are optional but recommended for sensitive environments.
+
+--read-only
+  Mounts the container's root filesystem as read-only. OpenCode can only
+  write to explicitly mounted volumes (your project folder).
+
+--cap-drop ALL
+  Drops all Linux kernel capabilities from the container. Prevents low-level
+  system operations even if the container is compromised.
+
+--memory 2g
+  Limits container to 2GB RAM. Prevents runaway memory usage.
+
+--cpus 2
+  Limits container to 2 CPU cores.
+
+--pids-limit 200
+  Limits the number of processes the container can spawn. Reduces fork bomb risk.
+
+Example of a fully hardened run command:
+
+  docker run -it --rm \
+    --name opencode-session \
+    --network host \
+    --read-only \
+    --security-opt no-new-privileges \
+    --cap-drop ALL \
+    --memory 2g \
+    --cpus 2 \
+    --pids-limit 200 \
+    -v /path/to/your/project:/home/opencodeuser/workspace \
+    -v "$HOME/.local/share/opencode/auth.json":/home/opencodeuser/.local/share/opencode/auth.json:ro \
+    -v "$HOME/.config/opencode":/home/opencodeuser/.config/opencode:ro \
+    -e ANTHROPIC_API_KEY \
+    opencode-sandbox
+
+
+===========================================================================
+WHAT IS AND IS NOT PROTECTED
+===========================================================================
+
+PROTECTED (container cannot access)
+- Your home directory and its contents (SSH keys, .env files, browser data)
+- Other projects and files outside the mounted workspace
+- The Docker socket (do not mount /var/run/docker.sock)
+- Host system binaries and configuration files
+
+NOT PROTECTED / REMAINING RISKS
+- The mounted workspace folder — OpenCode has full read/write access here
+- API keys passed as environment variables — visible to any process inside
+  the container
+- Network traffic — if using --network host, the container can reach the
+  internet freely (same as host)
+- Shared kernel — containers share the host Linux kernel; a kernel-level
+  exploit could still break out (this is true of all Docker containers)
+- The OpenCode HTTP server on port 4096 — if running an older version
+  (pre-1.1.10), this port may still be exposed; use v1.1.10 or later
+
+
+===========================================================================
+NOTES ON CREDENTIAL SAFETY
+===========================================================================
+
+- Never bake API keys into the Dockerfile or the image itself.
+- Always pass keys via -e flags or environment files at runtime.
+- Mount auth.json as read-only (:ro) so the container cannot overwrite it.
+- Do not mount your entire ~/.config or ~/.local directory — only the
+  specific opencode subdirectories needed.
+- Rotate API keys periodically (every 30-90 days depending on sensitivity).
+
+
+===========================================================================
+VERIFYING THE BUILD (Optional)
+===========================================================================
+
+OpenCode publishes SHA256 checksums for all release binaries at:
+  https://storage.googleapis.com/claude-code-dist-.../manifest.json
+
+After building, you can verify the installed binary inside the container:
+
+  docker run --rm opencode-sandbox opencode --version
+
+Cross-reference the version with the official OpenCode changelog at:
+  https://opencode.ai/changelog
+
+
+===========================================================================
+REFERENCES
+===========================================================================
+
+1. Docker, Inc. (2025, December 17). A new approach for coding agent safety.
+   Docker Engineering Blog.
+
+2. Docker, Inc. (2025). OpenCode sandbox. Docker Documentation.
+
+3. Docker, Inc. (n.d.). Rootless mode. Docker Security Documentation.
+
+4. Agile Web Operations. (2025, November 23). How to run OpenCode AI in a
+   Docker container.
+
+5. Ben-Ari, R. (2026, January 26). Custom containerized sandboxes for AI
+   agents. Medium.
+
+6. Lema, F. (2025). opencode-sandbox: Docker sandbox with daily auto-updates
+   for running OpenCode AI CLI. GitHub.

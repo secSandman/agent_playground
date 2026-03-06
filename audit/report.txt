@@ -1,0 +1,98 @@
+============================================================
+Security Audit Report
+============================================================
+Repo root: C:\Users\txsan\Desktop\open_code_project\opencode-sandbox
+Scanned files: 46 (skipped: 1)
+Summary: high=1 medium=3 low=3 info=13
+
+- HIGH   secrets         secret-pattern             [scripts\test\test-vault-local.ps1]
+  Potential Anthropic API key detected.
+- MEDIUM compose         syscall-restrictions       [.docker-compose\docker-compose.base.yml]
+  Service 'opencode' missing explicit seccomp/apparmor policy.
+- MEDIUM compose         syscall-restrictions       [.docker-compose\docker-compose.base.yml]
+  Service 'claudecode' missing explicit seccomp/apparmor policy.
+- MEDIUM dockerfile      runtime-hardening-hints    [build\claudecode\Dockerfile]
+  No runtime hardening hints found in Dockerfile comments/instructions.
+- LOW    compose         read-only-rootfs           [.docker-compose\docker-compose.base.yml]
+  Service 'opencode' does not set read_only: true (may be intentional).
+- LOW    compose         read-only-rootfs           [.docker-compose\docker-compose.base.yml]
+  Service 'claudecode' does not set read_only: true (may be intentional).
+- LOW    dockerfile      pinned-base-digest         [build\claudecode\Dockerfile]
+  Base image digest pin (@sha256) not detected.
+- INFO   compose         claudecode-security-config  [.docker-compose\docker-compose.base.yml]
+  ✓ Service 'claudecode' security settings:
+    user: 1001:1001
+    security_opt: no-new-privileges:true
+    cap_drop: ALL
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 100
+- INFO   compose         opencode-security-config   [.docker-compose\docker-compose.base.yml]
+  ✓ Service 'opencode' security settings:
+    user: 1001:1001
+    security_opt: no-new-privileges:true
+    cap_drop: ALL
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 100
+- INFO   dockerfile      apt-minimal                [build\claudecode\Dockerfile]
+  ✓ apt-get uses --no-install-recommends
+- INFO   dockerfile      apt-minimal                [build\opencode\Dockerfile]
+  ✓ apt-get uses --no-install-recommends
+- INFO   dockerfile      file-permissions           [build\claudecode\Dockerfile]
+  ✓ Restrictive chmod (400/600) found for security-sensitive files
+- INFO   dockerfile      file-permissions           [build\opencode\Dockerfile]
+  ✓ Restrictive chmod (400/600) found for security-sensitive files
+- INFO   dockerfile      non-root-user              [build\claudecode\Dockerfile]
+  ✓ Non-root USER: claudeuser (UID 1001)
+- INFO   dockerfile      non-root-user              [build\opencode\Dockerfile]
+  ✓ Non-root USER: opencodeuser (UID 1001)
+- INFO   dockerfile      pinned-base-digest         [build\opencode\Dockerfile]
+  ✓ Base image uses digest pinning (@sha256)
+- INFO   dockerfile      runtime-hardening-hints    [build\opencode\Dockerfile]
+  ✓ Runtime hardening hints found: cap_drop, no-new-privileges, read-only, security_opt
+- INFO   host-account    current-user-privilege    
+  ✓ Running as non-admin user: txsan
+- INFO   settings        claudecode-config          [build\claudecode\Dockerfile]
+  ✓ Claude hardened config (chmod 400):
+ignore-scripts=true
+save-exact=true
+audit=false
+fund=false
+
+- INFO   settings        opencode-config            [build\opencode\Dockerfile]
+  ✓ OpenCode hardened config:
+{
+  "autoupdate": false,
+  "permission": {
+    "webfetch": "deny",
+    "external_directory": {
+      "*": "deny"
+    },
+    "bash": {
+      "curl*": "deny",
+      "wget*": "deny",
+      "nc*": "deny",
+      "base64*": "deny",
+      "python -c*": "deny",
+      "node -e*": "deny",
+      "bash -c*": "deny",
+      "eval*": "deny",
+      "sudo*": "deny"
+    },
+    "read": {
+      "**/.env*": "deny",
+      "**/*.key": "deny",
+      "**/*.pem": "deny",
+      "**/.ssh/**": "deny",
+      "**/.aws/**": "deny",
+      "**/auth.json": "deny"
+    },
+    "edit": {
+      "**/opencode.json": "deny"
+    }
+  }
+}
+
+============================================================
+Note: This is a rough static scanner; validate findings manually before remediation.

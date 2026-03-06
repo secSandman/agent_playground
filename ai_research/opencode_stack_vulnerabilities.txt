@@ -1,0 +1,77 @@
+OPENCODE — RUNTIME & STACK VULNERABILITIES
+March 2026
+============================================
+
+BUN RUNTIME
+-----------
+CVE-2026-24910 — Trust Validation Bypass (Fixed in Bun v1.3.5)
+Bun ships with a default allowlist of 366 trusted package names permitted to run
+lifecycle scripts during installation. The trust check validates package name only,
+not source origin. An attacker can craft a malicious package under a trusted name
+(e.g., esbuild, sharp, playwright) and distribute it via a file path, symlink, git
+repo, or GitHub URL. Bun grants it full execution privileges. CWE-348.
+
+CVE-2025-8022 — Shell API Argument Injection (Withdrawn but relevant)
+Initially filed as OS command injection in Bun's $ shell API. Withdrawn because
+responsibility was assigned to the calling application, not Bun. Remains a direct
+concern for OpenCode since its core function is executing AI-directed shell commands.
+
+GO RUNTIME (TUI layer)
+-----------------------
+CVE-2025-61728 — Excessive CPU consumption in archive/zip package (Important)
+CVE-2025-61726 — Memory exhaustion via net/url query parameter parsing (Important)
+CVE-2025-61732 — Code smuggling via cgo doc comment parsing (Important)
+  Note: The cgo issue allowed code to be smuggled into compiled Go binaries without
+  detection. Supply chain integrity concern for any Go binary shipped to end users,
+  including OpenCode's TUI component.
+
+CVE-2025-58190 — Infinite parsing loop in golang.org/x/net/html (Feb 2026, DoS)
+CVE-2025-47911 — Quadratic parsing complexity in golang.org/x/net/html (Feb 2026, DoS)
+
+NPM SUPPLY CHAIN (OpenCode's distribution layer)
+-------------------------------------------------
+September 2025 — 18 widely used npm packages compromised via maintainer phishing.
+Malicious versions injected with credential-harvesting payloads. Packages had over
+2 billion combined weekly downloads. OpenCode installs through this same ecosystem.
+
+November 2025 — Shai-Hulud 2.0 worm propagated through npm's pre-install phase,
+before dependency resolution completes, achieving near-100% execution on build
+systems with no user interaction. The worm disguised itself using the legitimate
+bun.sh domain as a callback. The University of Toronto security advisory explicitly
+flagged bun.sh as actively abused for malware initialization and recommended
+network monitoring alerts for outbound traffic to that domain.
+
+PackageGate Research — Bun's trustedDependencies mechanism, npm's --ignore-scripts
+flag, and lockfile integrity checks all have documented gaps allowing malicious
+lifecycle scripts to execute at install time. npm (under Microsoft) closed the
+report as "works as expected." Bun patched in v1.3.5.
+
+SQLITE (Local session storage)
+-------------------------------
+CVE-2025-6965 — Buffer overflow in SQLite before v3.50.2. Integer overflow when
+aggregate query terms exceed available columns, leading to potential memory
+corruption. Practical risk for OpenCode's local usage is low — exploitation
+generally requires the attacker to already control SQL input or supply a malicious
+database file.
+
+KEY TAKEAWAYS
+-------------
+- Keep Bun updated to v1.3.5 or later.
+- Monitor outbound network traffic for unexpected connections to bun.sh.
+- The intersection of Bun runtime + npm distribution + developer credential access
+  makes OpenCode an ideal profile target for supply chain attacks.
+- The Go TUI binary should be verified against a known-good build toolchain version.
+- SQLite risk is low in isolation but elevated if any other local compromise exists.
+
+REFERENCES
+----------
+1. SentinelOne, Inc. (2026). CVE-2026-24910: Bun auth bypass vulnerability.
+2. GitHub Advisory Database. (2025). Withdrawn: CVE-2025-8022, Bun shell injection.
+3. Red Hat Product Security. (2026). RHSA-2026:2708, Go Toolset security update.
+4. Google, Inc. (2026). Go vulnerability database: CVE-2025-58190, CVE-2025-47911.
+5. Palo Alto Networks Unit 42. (2025, September 10). Widespread npm supply chain attack.
+6. FireCompass Intelligence. (2025, December 19). Weekly report: CVEs Dec 10-17, 2025.
+7. University of Toronto Information Security. (2025, December 5). NPM supply chain poisoning.
+8. Koi.ai Security Research. (2025). PackageGate: 6 zero-days in JS package managers.
+9. SentinelOne, Inc. (2025). CVE-2025-6965: SQLite buffer overflow vulnerability.
+10. SQLite Development Team. (n.d.). CVEs about SQLite. SQLite.org.

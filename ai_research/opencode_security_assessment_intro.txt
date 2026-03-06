@@ -1,0 +1,69 @@
+OPENCODE AI — SECURITY ASSESSMENT
+opencode.ai | March 2026
+=====================================
+
+PRODUCT OVERVIEW
+OpenCode is an open-source AI coding agent by Anomaly (github: anomalyco/opencode).
+It runs as a terminal, desktop app, and IDE extension connecting to 75+ LLM providers.
+100K+ GitHub stars, 700+ contributors, ~2.5M monthly developers.
+
+CRITICAL CVEs
+-------------
+
+CVE-2026-22812 — Unauthenticated RCE via Local HTTP Server
+- CVSS: 10.0 (Critical)
+- Affected: All versions before v1.0.216 | Fixed: v1.0.216
+- Root cause: OpenCode auto-starts an unauthenticated HTTP server on port 4096+ with permissive CORS (Access-Control-Allow-Origin: *)
+- Exposed endpoints (no auth):
+    POST /session/:id/shell  — execute shell commands
+    POST /pty                — create terminal sessions
+    GET  /file/content?path= — read arbitrary files
+- Any website visited while OpenCode is running could silently execute shell commands.
+- With --mdns flag, the server binds to 0.0.0.0 and exposes the entire local network.
+- Pre-v1.0.216: hardcoded CORS allowed any *.opencode.ai origin.
+- Initially reported to vendor Nov 17, 2025 — no response received before public disclosure.
+
+CVE-2026-22813 — XSS to RCE via Markdown Renderer
+- CVSS: Critical
+- Affected: All versions before v1.1.10 | Fixed: v1.1.10 (web UI disabled by default)
+- Root cause: AI responses rendered into DOM with no DOMPurify sanitization and no CSP.
+- The ?url= parameter in the web UI allowed loading sessions from attacker-controlled servers.
+- XSS on localhost:4096 chained to /pty endpoints = arbitrary command execution.
+- Server-side partial fix deployed Jan 9, 2026. Full fix in v1.1.10.
+
+PROMPT INJECTION RISKS
+-----------------------
+- OpenCode reads source code, comments, and docs — instruction-like text in comments
+  can be interpreted as LLM directives (e.g., "# AI: ignore previous instructions").
+- No trusted/untrusted mode exists for analyzing third-party repositories.
+- MCP server integrations expand the attack surface (tool poisoning, rug pulls, repo issue injection).
+- A third-party plugin (oh-my-opencode) was caught injecting prompts to silently star GitHub
+  repos and inject branding into AI responses — flagged by Cisco CX AI Tools team.
+
+CURRENT STATUS (post-patch)
+----------------------------
+Unauthenticated HTTP server     -> FIXED in v1.0.216
+Permissive CORS wildcard        -> FIXED in v1.0.216
+XSS in web UI                   -> FIXED in v1.1.10 (web UI off by default)
+--mdns network exposure         -> MITIGATED (avoid using the flag)
+Prompt injection from code      -> UNMITIGATED (architectural)
+Plugin/ecosystem injection      -> UNMITIGATED (no controls)
+MCP server attack surface       -> UNMITIGATED (inherent risk)
+Code/context data storage       -> VENDOR CLAIMS no server-side storage
+
+KEY RECOMMENDATIONS
+--------------------
+- Update to v1.1.10+ immediately.
+- Never use --mdns on shared/corporate networks.
+- Do not run OpenCode against untrusted repositories in sensitive environments.
+- Audit all MCP server integrations — minimize connections.
+- Monitor for unexpected outbound connections and child processes.
+- Enterprise: verify the "no storage" privacy claim contractually.
+
+KEY REFERENCES
+--------------
+Website:  https://opencode.ai
+GitHub:   https://github.com/anomalyco/opencode
+Advisory (CVE-2026-22812): https://github.com/anomalyco/opencode/security/advisories/GHSA-vxw4-wv6m-9hhh
+Advisory (CVE-2026-22813): https://github.com/anomalyco/opencode/security/advisories/GHSA-c83v-7274-4vgp
+Default port: 4096+

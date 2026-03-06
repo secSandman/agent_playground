@@ -1,0 +1,167 @@
+services:
+  # Vault dev server for local testing
+  vault-dev:
+    build:
+      context: ../build/vault
+    container_name: opencode-vault
+    ports:
+      - "8200:8200"
+    networks:
+      - opencode-net
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=root
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://127.0.0.1:8200
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--proxy", "off", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - vault-data:/vault/file
+
+  # Secrets fetcher - retrieves credentials from secrets management platform
+  secrets-fetcher:
+    build:
+      context: ..
+      dockerfile: ./secrets-fetcher/Dockerfile
+    container_name: opencode-secrets
+    depends_on:
+      vault-dev:
+        condition: service_healthy
+    volumes:
+      - ../config/prod/secrets-config.yaml:/config/secrets-config.yaml:ro
+      - secrets-data:/tmp
+      # NOTE: Vault token is NOT mounted - host machine handles auth
+    environment:
+      - SECRETS_CONFIG=/config/secrets-config.yaml
+      - SECRETS_OUTPUT=/tmp/opencode-secrets.env
+      # Pass through AWS credentials if using AWS Secrets Manager
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      # Pass through Vault configuration
+      - VAULT_ADDR=${VAULT_ADDR}
+      - VAULT_TOKEN=${VAULT_TOKEN}
+      - VAULT_NAMESPACE=${VAULT_NAMESPACE}
+      - VAULT_SKIP_VERIFY=${VAULT_SKIP_VERIFY}
+      # Pass through static env vars for static provider
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # AppRole credentials if using Vault AppRole
+      - VAULT_ROLE_ID=${VAULT_ROLE_ID}
+      - VAULT_SECRET_ID=${VAULT_SECRET_ID}
+    # Allow access to host network for local Vault testing
+    # Comment out 'networks' below and uncomment 'network_mode' for local Vault
+    # network_mode: "host"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - opencode-net
+
+  # Squid proxy for network policy enforcement
+  squid-proxy:
+    build:
+      context: ../build/squid/config
+    container_name: opencode-squid
+    networks:
+      - opencode-net
+    restart: unless-stopped
+    volumes:
+      - squid-logs:/var/log/squid
+    healthcheck:
+      test: ["CMD", "squid", "-k", "check"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # OpenCode sandbox with proxy and host filesystem access
+  opencode:
+    image: opencode-sandbox:1.2.17
+    container_name: opencode-sandbox
+    depends_on:
+      squid-proxy:
+        condition: service_healthy
+      # secrets-fetcher removed: using host-based fetching instead
+    networks:
+      - opencode-net
+    environment:
+      # Proxy configuration
+      - HTTP_PROXY=http://squid-proxy:3128
+      - HTTPS_PROXY=http://squid-proxy:3128
+      - NO_PROXY=localhost,127.0.0.1
+      # Secrets passed from host environment (no files, no token exposure)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      # Mount host workspace for file access
+      # CHANGE THIS to your actual project directory
+      - ${WORKSPACE_PATH:-../workspace}:/home/opencodeuser/workspace:rw
+      # Mount secrets volume (read-only)
+      - secrets-data:/secrets:ro
+      # Optional: Mount VS Code settings for integration
+      # - ${HOME}/.vscode:/home/opencodeuser/.vscode:ro
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=${OPENCODE_APPARMOR_PROFILE:-unconfined}
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 100
+    stdin_open: true
+    tty: true
+    # Note: NOT using --read-only because OpenCode needs temp file creation
+    # and NOT using --network=none because we need proxy access
+
+  # ClaudeCode sandbox with proxy and host filesystem access
+  claudecode:
+    build:
+      context: ../build/claudecode
+      dockerfile: Dockerfile
+    image: claudecode-sandbox:1.0.98
+    container_name: claudecode-sandbox
+    depends_on:
+      squid-proxy:
+        condition: service_healthy
+    networks:
+      - opencode-net
+    environment:
+      - HTTP_PROXY=http://squid-proxy:3128
+      - HTTPS_PROXY=http://squid-proxy:3128
+      - NO_PROXY=localhost,127.0.0.1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      - ${WORKSPACE_PATH:-../workspace}:/home/opencodeuser/workspace:rw
+      - secrets-data:/secrets:ro
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=${CLAUDECODE_APPARMOR_PROFILE:-unconfined}
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 100
+    stdin_open: true
+    tty: true
+
+networks:
+  opencode-net:
+    driver: bridge
+    name: opencode-network
+
+volumes:
+  squid-logs:
+    driver: local
+  secrets-data:
+    driver: local
+  vault-data:
+    driver: local

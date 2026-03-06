@@ -1,0 +1,71 @@
+# Secrets files (NEVER commit these!)
+opencode-secrets.env
+secrets-config.yaml
+.vault-token
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Common local secret dumps / overrides
+*.secrets
+*.secret
+*.local
+*.override
+
+# Docker volumes
+vault-data/
+secrets-data/
+squid-logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# VS Code local workspace artifacts
+*.code-workspace
+.history/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+Icon?
+
+# Windows shortcuts/metadata
+*.lnk
+
+# Certificates / private keys / SSH
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa
+id_dsa
+id_ed25519
+known_hosts
+authorized_keys
+
+# Extra local tokens/credentials
+*.token
+*.credentials
+*.creds
+
+# Logs
+*.log
