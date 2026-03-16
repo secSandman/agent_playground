@@ -2,6 +2,7 @@
 opencode-secrets.env
 secrets-config.yaml
 .vault-token
+config/prod/secrets-config.claudecode.local.yaml
 
 # Local environment files
 .env

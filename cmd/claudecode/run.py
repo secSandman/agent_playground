@@ -476,8 +476,20 @@ Examples:
         # ── STEP 1: Load secrets config and authenticate to Vault FIRST ──────
         # Nothing else starts until we have a valid token and secrets in hand.
         config_subdir = 'dev' if args.dev_mode else 'prod'
-        secrets_config_filename = 'secrets-config.claudecode.dev.yaml' if args.dev_mode else 'secrets-config.claudecode.yaml'
-        secrets_config_path = project_dir / 'config' / config_subdir / secrets_config_filename
+        if args.dev_mode:
+            secrets_config_filename = 'secrets-config.claudecode.dev.yaml'
+            secrets_config_path = project_dir / 'config' / config_subdir / secrets_config_filename
+        else:
+            template_filename = 'secrets-config.claudecode.yaml'
+            local_override_filename = 'secrets-config.claudecode.local.yaml'
+            local_override_path = project_dir / 'config' / config_subdir / local_override_filename
+
+            if local_override_path.exists():
+                secrets_config_filename = local_override_filename
+                secrets_config_path = local_override_path
+            else:
+                secrets_config_filename = template_filename
+                secrets_config_path = project_dir / 'config' / config_subdir / template_filename
 
         secrets_config = load_secrets_config(str(secrets_config_path))
 
