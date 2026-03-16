@@ -294,6 +294,7 @@ def run_claudecode(
     # Add prompt if provided (one-shot mode)
     if prompt:
         if provider == 'claude':
+            command.extend(['--permission-mode', 'acceptEdits'])
             command.extend(['-p', prompt])
         else:
             command.extend(['run', prompt])
@@ -352,8 +353,7 @@ Examples:
     
     parser.add_argument(
         '--workspace',
-        required=True,
-        help='Path to workspace directory'
+        help='Path to workspace directory (required unless using --isolated or --isolated-fs)'
     )
     
     parser.add_argument(
@@ -447,9 +447,15 @@ Examples:
         print(f"{Fore.RED}[ERROR] Cannot use both --isolated and --isolated-fs{Style.RESET_ALL}")
         sys.exit(1)
     
-    # Validate workspace
-    selected_workspace = args.explicit_path if args.explicit_path else args.workspace
-    workspace_path = validate_workspace(selected_workspace)
+    # Validate workspace only when host mount is needed
+    if args.isolated or args.isolated_fs:
+        workspace_path = '(isolated-no-host-workspace)'
+    else:
+        if not args.workspace and not args.explicit_path:
+            print(f"{Fore.RED}[ERROR] --workspace is required unless using --isolated or --isolated-fs{Style.RESET_ALL}")
+            sys.exit(1)
+        selected_workspace = args.explicit_path if args.explicit_path else args.workspace
+        workspace_path = validate_workspace(selected_workspace)
     
     # Determine mode
     mode = 'dev' if args.dev_mode else 'prod'

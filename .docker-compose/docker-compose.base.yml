@@ -139,7 +139,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
-      - ${WORKSPACE_PATH:-../workspace}:/home/opencodeuser/workspace:rw
+      - ${WORKSPACE_PATH:-../workspace}:/home/claudeuser/workspace:rw
       - secrets-data:/secrets:ro
     user: "1001:1001"
     security_opt:
