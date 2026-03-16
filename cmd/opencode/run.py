@@ -477,29 +477,53 @@ Examples:
         print(f"{Fore.CYAN}Fetching secrets from Vault...{Style.RESET_ALL}")
         print(f"Mode: {Fore.CYAN}{mode.upper()}{Style.RESET_ALL}")
         
-        vault_addr = 'http://localhost:8200'
+        vault_addr = 'http://localhost:8200' if args.dev_mode else os.environ.get('VAULT_ADDR', 'http://localhost:8200')
         vault_token = 'root' if args.dev_mode else os.environ.get('VAULT_TOKEN', '')
-        
+
         # Try to find vault CLI
         vault_cli = 'vault'  # Default to PATH
         # Check if user has vault in Downloads (common location)
         vault_download_path = Path.home() / 'Downloads' / 'vault_1.20.0_windows_amd64' / 'vault.exe'
         if vault_download_path.exists():
             vault_cli = str(vault_download_path)
-        
+
         # Point to config subdirectories
         config_subdir = 'dev' if args.dev_mode else 'prod'
         secrets_config_filename = f'secrets-config.{config_subdir}.yaml' if args.dev_mode else 'secrets-config.yaml'
         secrets_config_path = project_dir / 'config' / config_subdir / secrets_config_filename
-        
+
         secrets_config = load_secrets_config(str(secrets_config_path))
-        
+
         print(f"[DEBUG] Loaded {len(secrets_config)} secrets from config")
         for secret in secrets_config:
             print(f"[DEBUG]   - {secret.get('env')}: {secret.get('path')}")
-        
-        vault = VaultClient(vault_addr, vault_token, mode, vault_cli_path=vault_cli)
-        
+
+        # Load vault connection config for prod (namespace, oidc role/mount)
+        vault_namespace = ''
+        oidc_role = 'entra'
+        oidc_mount = 'oidc'
+        if not args.dev_mode:
+            try:
+                with open(secrets_config_path, 'r') as f:
+                    raw_cfg = yaml.safe_load(f)
+                vault_cfg = raw_cfg.get('vault', {})
+                vault_addr = vault_cfg.get('addr', vault_addr)
+                vault_namespace = vault_cfg.get('namespace', '')
+                oidc_role = vault_cfg.get('oidc', {}).get('role', 'entra')
+                oidc_mount = vault_cfg.get('oidc', {}).get('mount_path', 'oidc')
+            except Exception:
+                pass
+
+        vault = VaultClient(vault_addr, vault_token, mode, vault_cli_path=vault_cli,
+                            vault_namespace=vault_namespace, oidc_role=oidc_role, oidc_mount=oidc_mount)
+
+        # In prod mode, trigger OIDC login (opens browser) to get a fresh token
+        if not args.dev_mode:
+            if not vault.login_oidc():
+                print(f"{Fore.RED}[ERROR] OIDC login failed{Style.RESET_ALL}")
+                sys.exit(1)
+            print()
+
         if not vault.connect():
             print(f"{Fore.RED}[ERROR] Could not connect to Vault at {vault_addr}{Style.RESET_ALL}")
             sys.exit(1)

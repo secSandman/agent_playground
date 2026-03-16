@@ -473,6 +473,77 @@ Examples:
     docker_manager = DockerComposeManager(str(project_dir))
     
     try:
+        # ── STEP 1: Load secrets config and authenticate to Vault FIRST ──────
+        # Nothing else starts until we have a valid token and secrets in hand.
+        config_subdir = 'dev' if args.dev_mode else 'prod'
+        secrets_config_filename = 'secrets-config.claudecode.dev.yaml' if args.dev_mode else 'secrets-config.claudecode.yaml'
+        secrets_config_path = project_dir / 'config' / config_subdir / secrets_config_filename
+
+        secrets_config = load_secrets_config(str(secrets_config_path))
+
+        vault_addr = 'http://localhost:8200' if args.dev_mode else 'http://localhost:8200'
+        vault_token = 'root' if args.dev_mode else os.environ.get('VAULT_TOKEN', '')
+        vault_namespace = ''
+        oidc_role = 'entra'
+        oidc_mount = 'oidc'
+        oidc_auth_namespace = ''  # root namespace for OIDC login
+
+        if not args.dev_mode:
+            try:
+                with open(secrets_config_path, 'r') as f:
+                    raw_cfg = yaml.safe_load(f)
+                vault_cfg = raw_cfg.get('vault', {})
+                vault_addr = vault_cfg.get('addr', vault_addr)
+                vault_namespace = vault_cfg.get('namespace', '')
+                oidc_role = vault_cfg.get('oidc', {}).get('role', 'entra')
+                oidc_mount = vault_cfg.get('oidc', {}).get('mount_path', 'oidc')
+                oidc_auth_namespace = vault_cfg.get('oidc', {}).get('auth_namespace', '')
+            except Exception as e:
+                print(f"{Fore.RED}[ERROR] Failed to read secrets config: {e}{Style.RESET_ALL}")
+                sys.exit(1)
+
+        vault_cli = 'vault'
+        vault_download_path = Path.home() / 'Downloads' / 'vault_1.20.0_windows_amd64' / 'vault.exe'
+        if vault_download_path.exists():
+            vault_cli = str(vault_download_path)
+
+        print(f"{Fore.CYAN}[1/4] Authenticating to Vault...{Style.RESET_ALL}")
+        print(f"  Config:    {secrets_config_filename}")
+        print(f"  Vault:     {vault_addr}")
+        if vault_namespace:
+            print(f"  KV Namespace: {vault_namespace}")
+        print(f"  Auth Namespace: {oidc_auth_namespace or '(root)'}")
+        print()
+
+        vault = VaultClient(vault_addr, vault_token, mode, vault_cli_path=vault_cli,
+                            vault_namespace=vault_namespace, oidc_role=oidc_role, oidc_mount=oidc_mount,
+                            oidc_auth_namespace=oidc_auth_namespace)
+
+        if not args.dev_mode:
+            if not vault.login_oidc():
+                print(f"{Fore.RED}[ERROR] OIDC login failed — aborting before any containers start.{Style.RESET_ALL}")
+                sys.exit(1)
+            print()
+
+        if not vault.connect():
+            print(f"{Fore.RED}[ERROR] Could not connect to Vault at {vault_addr}{Style.RESET_ALL}")
+            sys.exit(1)
+
+        print(f"{Fore.CYAN}[2/4] Fetching secrets from Vault...{Style.RESET_ALL}")
+        for secret in secrets_config:
+            print(f"  - {secret.get('env')}: {secret.get('path')}")
+        print()
+        
+        print(f"{Fore.CYAN}Fetching secrets...{Style.RESET_ALL}")
+        secrets, _ = vault.fetch_secrets(secrets_config)
+
+        if not secrets:
+            print(f"{Fore.YELLOW}[WARN] No secrets fetched from Vault{Style.RESET_ALL}")
+
+        # ── STEP 3: Secrets in hand — now start containers ───────────────────
+        print(f"{Fore.CYAN}[3/4] Starting containers...{Style.RESET_ALL}")
+        print()
+
         # Build images if not skipped
         if not args.no_rebuild:
             build_target = 'claudecode' if args.provider in ['auto', 'claude'] else 'opencode'
@@ -480,81 +551,30 @@ Examples:
                 print(f"{Fore.RED}[ERROR] Failed to build images{Style.RESET_ALL}")
                 sys.exit(1)
             print()
-        
-        # Check/start Vault in dev mode
+
+        # Check/start Vault dev container (dev mode only)
         if args.dev_mode:
             print(f"{Fore.CYAN}Checking local Vault dev server...{Style.RESET_ALL}")
-            
             if docker_manager.is_running('opencode-vault'):
                 print(f"{Fore.GREEN}Vault is running and ready{Style.RESET_ALL}")
             else:
-                print(f"{Fore.RED}ERROR: Vault is not running!{Style.RESET_ALL}")
-                print()
-                print(f"To start Vault in dev mode, run:")
-                print(f"  python start_vault.py")
-                print()
+                print(f"{Fore.RED}ERROR: Vault is not running! Run: python start_vault.py{Style.RESET_ALL}")
                 sys.exit(1)
-            
             print()
-        
+
         # Check/start Squid proxy
         print(f"{Fore.CYAN}Checking Squid proxy...{Style.RESET_ALL}")
-        
         if docker_manager.is_running('opencode-squid'):
             print(f"{Fore.GREEN}Squid is already running{Style.RESET_ALL}")
         else:
-            print(f"{Fore.CYAN}Starting Squid proxy for network policy enforcement...{Style.RESET_ALL}")
-            
+            print(f"{Fore.CYAN}Starting Squid proxy...{Style.RESET_ALL}")
             if not docker_manager.up('squid-proxy'):
                 print(f"{Fore.RED}[ERROR] Failed to start Squid proxy{Style.RESET_ALL}")
                 sys.exit(1)
-            
-            # Give Squid a moment to start
-            print(f"{Fore.CYAN}Waiting for proxy to start...{Style.RESET_ALL}")
             import time
             time.sleep(3)
             print(f"{Fore.GREEN}Proxy ready{Style.RESET_ALL}")
-        
         print()
-        
-        # Fetch secrets from Vault on host machine
-        print(f"{Fore.CYAN}Fetching secrets on host machine (Vault token never leaves your computer)...{Style.RESET_ALL}")
-        print()
-        print(f"{Fore.CYAN}Fetching secrets from Vault...{Style.RESET_ALL}")
-        print(f"Mode: {Fore.CYAN}{mode.upper()}{Style.RESET_ALL}")
-        
-        vault_addr = 'http://localhost:8200'
-        vault_token = 'root' if args.dev_mode else os.environ.get('VAULT_TOKEN', '')
-        
-        # Try to find vault CLI
-        vault_cli = 'vault'  # Default to PATH
-        # Check if user has vault in Downloads (common location)
-        vault_download_path = Path.home() / 'Downloads' / 'vault_1.20.0_windows_amd64' / 'vault.exe'
-        if vault_download_path.exists():
-            vault_cli = str(vault_download_path)
-        
-        # Point to config subdirectories
-        config_subdir = 'dev' if args.dev_mode else 'prod'
-        secrets_config_filename = 'secrets-config.claudecode.dev.yaml' if args.dev_mode else 'secrets-config.claudecode.yaml'
-        secrets_config_path = project_dir / 'config' / config_subdir / secrets_config_filename
-        
-        secrets_config = load_secrets_config(str(secrets_config_path))
-        
-        print(f"[DEBUG] Loaded {len(secrets_config)} secrets from config")
-        for secret in secrets_config:
-            print(f"[DEBUG]   - {secret.get('env')}: {secret.get('path')}")
-        
-        vault = VaultClient(vault_addr, vault_token, mode, vault_cli_path=vault_cli)
-        
-        if not vault.connect():
-            print(f"{Fore.RED}[ERROR] Could not connect to Vault at {vault_addr}{Style.RESET_ALL}")
-            sys.exit(1)
-        
-        print(f"{Fore.CYAN}Fetching secrets...{Style.RESET_ALL}")
-        secrets, _ = vault.fetch_secrets(secrets_config)
-        
-        if not secrets:
-            print(f"{Fore.YELLOW}[WARN] No secrets fetched from Vault{Style.RESET_ALL}")
 
         effective_provider = args.provider
         if effective_provider == 'auto':

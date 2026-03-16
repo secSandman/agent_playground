@@ -13,23 +13,30 @@ from colorama import Fore, Style
 class VaultClient:
     """Interact with Vault to fetch secrets using Vault CLI."""
 
-    def __init__(self, vault_addr: str, vault_token: str, mode: str = "dev", vault_cli_path: str = "vault"):
-        """Initialize Vault client.
-        
-        Args:
-            vault_addr: Vault server address (e.g., http://localhost:8200)
-            vault_token: Vault authentication token
-            mode: 'dev' or 'prod' for logging context
-            vault_cli_path: Path to vault CLI executable
-        """
+    def __init__(self, vault_addr: str, vault_token: str, mode: str = "dev", vault_cli_path: str = "vault",
+                 vault_namespace: str = "", oidc_role: str = "", oidc_mount: str = "oidc",
+                 oidc_auth_namespace: str = ""):
         self.vault_addr = vault_addr
         self.vault_token = vault_token
         self.mode = mode
         self.vault_cli_path = vault_cli_path
-        
-        # Set environment for vault CLI
+        self.vault_namespace = vault_namespace
+        self.oidc_role = oidc_role
+        self.oidc_mount = oidc_mount
+        self.oidc_auth_namespace = oidc_auth_namespace  # root namespace for OIDC login
+
         os.environ['VAULT_ADDR'] = vault_addr
-        os.environ['VAULT_TOKEN'] = vault_token
+        if vault_namespace:
+            os.environ['VAULT_NAMESPACE'] = vault_namespace
+        if vault_token:
+            os.environ['VAULT_TOKEN'] = vault_token
+        # Set an empty VAULT_TOKEN so vault CLI doesn't fall back to reading
+        # ~/.vault-token (which fails on Windows with "Incorrect function")
+        elif 'VAULT_TOKEN' not in os.environ:
+            os.environ['VAULT_TOKEN'] = ''
+        # Disable the file-based token helper — avoids Windows pipe/file errors
+        # with ~/.vault-token on certain filesystem configurations
+        os.environ['VAULT_TOKEN_HELPER'] = ''
 
     def connect(self) -> bool:
         """Connect to Vault.
@@ -59,29 +66,91 @@ class VaultClient:
             print(f"{Fore.RED}[ERROR] Failed to connect to Vault: {e}{Style.RESET_ALL}")
             return False
 
+    def login_oidc(self) -> bool:
+        """Trigger OIDC browser login and capture the resulting token."""
+        import json, shutil
+        from pathlib import Path
+
+        print(f"{Fore.CYAN}Authenticating to Vault via OIDC (role={self.oidc_role})...{Style.RESET_ALL}")
+
+        # Build a clean env for the vault subprocess so the token helper
+        # never tries to read a stale/corrupt ~/.vault-token before login.
+        vault_env = os.environ.copy()
+        vault_env['VAULT_ADDR'] = self.vault_addr
+        vault_env['VAULT_TOKEN'] = ''          # clear so helper is not consulted
+        # Keep namespace out of env for login; pass it explicitly as CLI arg.
+        vault_env.pop('VAULT_NAMESPACE', None)
+
+        # Only pass -path if the mount name differs from the method name.
+        # `-method=oidc` already routes to /auth/oidc/; adding `-path=oidc`
+        # would double it to /auth/oidc/oidc/ and cause a 403.
+        cmd = [self.vault_cli_path, 'login', '-method=oidc', '-format=json']
+        if self.oidc_auth_namespace:
+            cmd.append(f'-namespace={self.oidc_auth_namespace}')
+        if self.oidc_mount and self.oidc_mount != 'oidc':
+            cmd.append(f'-path={self.oidc_mount}')
+        cmd.append(f'role={self.oidc_role}')
+
+        try:
+            # Run interactively (no capture) so the browser callback URL is visible
+            result = subprocess.run(cmd, env=vault_env, check=False, timeout=120,
+                                    capture_output=True, text=True)
+
+            if result.stdout.strip():
+                try:
+                    data = json.loads(result.stdout)
+                    token = data.get('auth', {}).get('client_token', '').strip()
+                    if token:
+                        self.vault_token = token
+                        os.environ['VAULT_TOKEN'] = token
+                        print(f"{Fore.GREEN}[OK] OIDC login successful{Style.RESET_ALL}")
+                        return True
+                except json.JSONDecodeError:
+                    pass
+
+            # Fallback: vault wrote token to ~/.vault-token (non -no-store path)
+            token_file = Path.home() / '.vault-token'
+            if token_file.is_file():
+                token = token_file.read_text().strip()
+                if token:
+                    self.vault_token = token
+                    os.environ['VAULT_TOKEN'] = token
+                    print(f"{Fore.GREEN}[OK] OIDC login successful (token from file){Style.RESET_ALL}")
+                    return True
+
+            print(f"{Fore.RED}[ERROR] OIDC login failed: {result.stderr.strip()}{Style.RESET_ALL}")
+            return False
+
+        except subprocess.TimeoutExpired:
+            print(f"{Fore.RED}[ERROR] OIDC login timed out (120s){Style.RESET_ALL}")
+            return False
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR] OIDC login error: {e}{Style.RESET_ALL}")
+            return False
+
     def fetch_secret(self, path: str, key: str) -> Optional[str]:
         """Fetch a single secret from Vault.
-        
-        Args:
-            path: Secret path (e.g., 'secret/opencode/openai')
-            key: Key within the secret (e.g., 'api_key')
-            
-        Returns:
-            Secret value if found, None otherwise
+
+        Path may be a full KV v2 mount-prefix path like 'Secrets/kv/opencode/openai'.
+        Splits on first two segments to derive -mount and sub-path automatically.
         """
         try:
-            # Use vault kv get -field=<key> <path>
-            result = subprocess.run(
-                [self.vault_cli_path, 'kv', 'get', f'-field={key}', path],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10
-            )
-            
+            # Path format from config: '<mount>/<sub-path>', e.g. 'kv/opencode/openai'
+            # vault kv get requires: -mount=<mount> -namespace=<ns> <sub-path>
+            parts = path.split('/', 1)
+            if len(parts) == 2:
+                mount, sub_path = parts
+                cmd = [self.vault_cli_path, 'kv', 'get',
+                       f'-mount={mount}',
+                       f'-field={key}',
+                       sub_path]
+            else:
+                cmd = [self.vault_cli_path, 'kv', 'get', f'-field={key}', path]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=10)
+
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
-            
             return None
         except subprocess.TimeoutExpired:
             print(f"{Fore.YELLOW}[WARN] Timeout fetching {path}{Style.RESET_ALL}")

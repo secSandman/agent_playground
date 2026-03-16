@@ -80,6 +80,7 @@ class VaultSecretsManager(SecretsManager):
         os.environ['VAULT_ADDR'] = self.vault_addr
         if self.namespace:
             os.environ['VAULT_NAMESPACE'] = self.namespace
+            logger.info(f"Vault namespace: {self.namespace}")
     
     def authenticate(self) -> str:
         """Authenticate to Vault and return token"""
@@ -114,31 +115,27 @@ class VaultSecretsManager(SecretsManager):
         return token
     
     def _auth_oidc(self) -> str:
-        """Authenticate using OIDC"""
+        """Authenticate using OIDC (e.g. Entra ID via HCP Vault)"""
         role = self.vault_config.get('oidc', {}).get('role', '').strip()
         mount_path = self.vault_config.get('oidc', {}).get('mount_path', 'oidc')
-        
-        if role:
-            logger.info(f"Starting OIDC authentication with role: {role}")
-        else:
-            logger.info("Starting OIDC authentication with default role")
+
+        logger.info(f"Starting OIDC authentication — mount={mount_path}, role={role or '(default)'}")
         logger.info("This will open your browser for authentication...")
-        
-        cmd = ['vault', 'login', '-method=oidc', f'-path={mount_path}']
+
+        cmd = ['vault', 'login', f'-method=oidc', f'-path={mount_path}', '-no-store', '-format=json']
         if role:
             cmd.append(f'role={role}')
         
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            # Token is stored in ~/.vault-token by vault CLI
-            token_file = Path.home() / '.vault-token'
-            if token_file.exists():
-                token = token_file.read_text().strip()
+            login_data = json.loads(result.stdout)
+            token = login_data.get('auth', {}).get('client_token', '').strip()
+            if token:
                 role_msg = f"role: {role}" if role else "default role"
                 self.audit(f"OIDC authentication successful for {role_msg}")
                 return token
-            else:
-                raise ValueError("OIDC login succeeded but no token found")
+
+            raise ValueError("OIDC login succeeded but no token in auth.client_token")
         except subprocess.CalledProcessError as e:
             logger.error(f"OIDC authentication failed: {e.stderr}")
             raise

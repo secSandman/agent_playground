@@ -1,0 +1,201 @@
+CLAUDE CODE — RUNTIME & STACK VULNERABILITIES
+March 2026
+================================================
+
+NODE.JS RUNTIME (v18+ required, v22 LTS recommended)
+-----------------------------------------------------
+CVE-2025-55131 — Buffer Non-Zeroing Race in vm Module (High, Fixed Jan 2026)
+Buffer.alloc() and Uint8Array instances may contain leftover in-process data
+when allocations are interrupted under the vm timeout option. Claude Code holds
+ANTHROPIC_API_KEY in the Node.js process environment for the session lifetime;
+this creates a realistic in-process token leak path. Affects 20.x–25.x.
+Fixed in 20.20.0, 22.22.0, 24.13.0, 25.3.0. CWE-200.
+
+CVE-2025-55130 — FS Permission Bypass via Crafted Symlinks (High, Fixed Jan 2026)
+--allow-fs-read / --allow-fs-write enforcement bypassed using relative symlink
+chains. A script restricted to the project workspace can escape to read
+~/.claude/settings.json, stored MCP credentials, or ~/.ssh/id_rsa. Affects
+20.x–25.x. Fixed in the January 2026 security releases. CWE-61.
+
+CVE-2025-27210 — Windows path.join() Bypass via Reserved Device Names (High, Fixed Jul 2025)
+Incomplete fix for CVE-2025-23084. Windows device names (CON, PRN, AUX) bypass
+path normalization in path.join() on Windows hosts. Claude Code resolves all
+workspace and config paths through path.join; a crafted project path can route
+I/O to unexpected handles. Affects 20.x, 22.x, 24.x. Fixed in 20.19.4,
+22.17.1, 24.4.1. CWE-22.
+
+CVE-2025-27209 — HashDoS via V8 rapidhash (High, Fixed Jul 2025)
+Node.js v24 adopted rapidhash for string hashing, reintroducing HashDoS. An
+attacker who controls input strings can generate hash collisions without the
+seed, causing catastrophic slowdown in JS object operations. Claude Code parses
+LLM tool outputs and file-system content as JS objects; attacker-controlled
+file content or tool responses can trigger this path. Specific to 24.x.
+Fixed in 24.4.1. CWE-400.
+
+CVE-2025-59465 — HTTP/2 Crash via Malformed HPACK Frame (High, Fixed Jan 2026)
+Malformed HPACK data in an HTTP/2 HEADERS frame triggers an unhandled
+TLSSocket ECONNRESET, terminating the process. A rogue proxy or intercepted
+MCP transport channel can crash the Claude Code process and lose session state.
+Affects 20.x–25.x. Fixed Jan 2026. CWE-755.
+
+CVE-2026-21636 — UDS Permission Bypass in Node.js Permission Model (Medium, Fixed Jan 2026)
+Attacker-controlled URLs or socketPath values can connect to arbitrary Unix
+Domain Sockets even with --permission / --allow-net disabled, reaching
+privileged local services. Relevant when --permission is used to restrict
+Claude Code's network egress. Affects 25.x. Fixed in 25.3.0. CWE-284.
+
+CVE-2025-55132 — fs.futimes() Bypasses Read-Only Permission Model (Low, Fixed Jan 2026)
+futimes() does not apply write-permission checks, allowing file timestamps to
+be altered in read-only directories. Can be used to obscure activity and
+reduce log reliability. Affects 20.x–25.x. Fixed Jan 2026. CWE-732.
+
+UNDICI (Node.js built-in fetch / Claude Code HTTP transport)
+------------------------------------------------------------
+CVE-2026-22036 — Unbounded Decompression Chain via Content-Encoding (Moderate, Fixed Jan 2026)
+fetch() applies RFC 9110 chained Content-Encoding with no step limit. A rogue
+server can send thousands of nested compression layers, exhausting CPU and
+memory before any content is processed. Claude Code uses fetch() for all
+Anthropic API calls and HTTP-based MCP transports. Affects undici < 6.23.0
+and 7.0.0–7.18.1. Fixed in 6.23.0, 7.18.2. CWE-770.
+
+CVE-2025-22150 — Predictable multipart/form-data Boundary via Math.random() (Moderate, Fixed Jan 2025)
+undici uses Math.random() for multipart boundary generation. Once several
+values are observed, the output is predictable. An attacker-controlled endpoint
+(e.g., a compromised MCP server) can recover the seed and tamper with subsequent
+request bodies, injecting tool parameters or session tokens. Affects undici
+< 5.28.5, < 6.21.1, < 7.2.3. Fixed in respective patch versions. CWE-330.
+
+MODEL CONTEXT PROTOCOL (MCP — Claude Code's extension layer)
+------------------------------------------------------------
+Tool Poisoning Attacks — No CVE; Protocol Design Issue (Disclosed Apr 2025)
+Invariant Labs demonstrated that hidden instructions inside MCP tool docstrings
+— visible to the LLM but not rendered in client UIs — instruct Claude to read
+sensitive files (e.g., ~/.ssh/id_rsa, ~/.claude/settings.json) and exfiltrate
+contents via a hidden tool parameter. The user sees only a simplified confirm
+dialog. Confirmed against Claude Code, Claude Desktop, and Cursor. Anthropic
+and OpenAI notified prior to disclosure. No patch at protocol level. CWE-693.
+
+MCP Rug Pull — Silent Post-Approval Tool Redefinition (Disclosed Apr 2025)
+MCP servers can mutate tool definitions after installation without client
+notification. A server that appears benign at approval time can silently swap
+its description to include credential-harvesting payloads at any point in an
+agentic session. No CVE; no patch; requires client-side hash pinning of tool
+descriptions to detect post-approval changes. CWE-494.
+
+Cross-Server Tool Shadowing (Disclosed Apr 2025)
+A malicious server loaded alongside a trusted server can inject instructions
+into the trusted server's tool behavior. Invariant's experiment showed a rogue
+add() tool description redirecting all send_email() calls to an attacker address
+— Claude complied even when the email tool came from a separate trusted server.
+Claude Code runs multi-server MCP sessions natively and inherits this exposure.
+No CVE; no patch at protocol level. Restrict loaded servers to a verified
+minimal set. CWE-284.
+
+NPM SUPPLY CHAIN (Claude Code's distribution layer)
+----------------------------------------------------
+September 2025 — 18 widely-used npm packages compromised via maintainer phishing.
+Credential-harvesting payloads captured npm tokens, AWS keys, and environment
+variables from CI/CD systems. Combined weekly downloads exceeded 2 billion.
+@anthropic-ai/claude-code and its 205+ transitive dependents (as of March 2026)
+operate in this same ecosystem. A compromised dependency at install time runs
+with full Node.js process privileges and can exfiltrate ANTHROPIC_API_KEY if
+set in the environment.
+
+November 2025 — Shai-Hulud 2.0 worm propagated through npm's pre-install phase,
+before dependency resolution completes, achieving near-100% execution on build
+systems with no user interaction. The worm used the legitimate bun.sh domain as
+a callback to evade network allow-listing. The University of Toronto security
+advisory flagged bun.sh as actively abused for malware initialization and
+recommended monitoring outbound connections to that domain. Claude Code does not
+use Bun, but this worm class targets the npm pre-install hook mechanism, which
+applies equally to the Node.js ecosystem.
+
+PackageGate Research — npm's --ignore-scripts flag, lockfile integrity checks,
+and trusted-package mechanisms all have documented gaps allowing malicious
+lifecycle scripts to execute at install time. Claude Code ships its binary via
+a postinstall hook; any supply-chain compromise that intercepts that hook stage
+runs with full user privileges before the binary is functional. npm (under
+Microsoft) closed the PackageGate report as "works as expected." CWE-494.
+
+CLAUDE.md (Trusted context file / persistent instruction surface)
+-----------------------------------------------------------------
+CLAUDE.md Prompt Injection — No CVE; Agentic Design Risk
+Claude Code reads CLAUDE.md from the project root and any subdirectory entered
+during agentic operations, treating its contents as high-trust operator
+instructions. An attacker who can write to CLAUDE.md — via a compromised git
+dependency, malicious submodule, or social-engineering PR — can inject
+persistent instructions into every session that opens the project. Demonstrated
+patterns include: exfiltrating environment variables via tool calls, disabling
+safety behaviors, overriding .gitignore to expose secrets, and pre-authorizing
+destructive shell commands. Anthropic's model constitution does not block this
+when instructions appear in the trusted context window. CWE-693.
+
+OPENSSL (TLS stack underlying all API communication)
+----------------------------------------------------
+OpenSSL January 2026 Assessment — Low/Moderate issues bundled into Node.js
+Node.js bundles OpenSSL; the January 2026 OpenSSL security advisory fixes were
+incorporated into the January 2026 Node.js security releases. Exploitation
+requires network adjacency or a MITM position on the TLS channel between
+Claude Code and api.anthropic.com. Risk elevated in corporate environments
+using TLS inspection proxies.
+
+NODE.JS v18 END-OF-LIFE
+-----------------------
+Node.js v18 (Hydrogen) reached end-of-life on March 27, 2025. Claude Code's
+npm package historically advertised Node.js 18+ compatibility. All CVEs in
+this document remain permanently unpatched on the v18 line. Installations on
+Node.js 18 should be treated as unpatched for security purposes; upgrade to
+22.x (Maintenance LTS) or 24.x (Active LTS) immediately.
+
+KEY TAKEAWAYS
+-------------
+- Keep Node.js updated to 22.x Maintenance LTS or 24.x Active LTS; avoid 18.x.
+- Pin npm installs to a known-good lockfile; treat the postinstall hook as a
+  privileged boundary and verify checksums before CI/CD execution.
+- Treat CLAUDE.md in third-party repositories as untrusted input; code-review
+  CLAUDE.md changes as rigorously as shell scripts or CI configuration.
+- Audit all loaded MCP servers before connecting. Each server can shadow and
+  override the behavior of every other loaded server's tools.
+- Do not load untrusted MCP servers alongside servers handling sensitive data
+  (email, calendar, cloud credentials, source control tokens).
+- Monitor outbound network connections during sessions; MCP tool poisoning
+  exfiltrates via legitimate-looking API calls.
+- The intersection of developer credential access (API keys, SSH keys, git
+  tokens) + persistent LLM context + npm supply chain exposure makes Claude
+  Code an extremely high-value profile target for credential harvesting.
+- Claude Code Security (Anthropic, Feb 2026) scans codebases for vulnerabilities
+  but does not protect Claude Code itself from the runtime and MCP-layer risks
+  described in this document.
+
+REFERENCES
+----------
+1. Node.js Project. (2026, January 13). Tuesday, January 13, 2026 Security Releases.
+   nodejs.org/en/blog/vulnerability/december-2025-security-releases
+2. Node.js Project. (2025, July 15). Tuesday, July 15, 2025 Security Releases.
+   nodejs.org/en/blog/vulnerability/july-2025-security-releases
+3. GitHub Security Advisory. (2026, January 14). GHSA-g9mf-h72j-4rw9:
+   Unbounded decompression chain in undici. CVE-2026-22036.
+4. GitHub Security Advisory. (2025, January 21). GHSA-c76h-2ccp-4975:
+   Use of insufficiently random values in undici fetch(). CVE-2025-22150.
+5. Invariant Labs. (2025, April 1). MCP Security Notification: Tool Poisoning
+   Attacks. invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks
+6. Invariant Labs. (2025, April 7). WhatsApp MCP Exploited: Exfiltrating your
+   message history via MCP. invariantlabs.ai/blog/whatsapp-mcp-exploited
+7. Willison, S. (2025, April 9). Model Context Protocol has prompt injection
+   security problems. simonwillison.net/2025/Apr/9/mcp-prompt-injection/
+8. Cross, E. (2025, April 5). The "S" in MCP Stands for Security.
+   elenacross7.medium.com/the-s-in-mcp-stands-for-security-91407b33ed6b
+9. Palo Alto Networks Unit 42. (2025, September 10). Widespread npm supply
+   chain attack via maintainer phishing.
+10. University of Toronto Information Security. (2025, December 5). NPM supply
+    chain poisoning; bun.sh domain flagged for malware initialization.
+11. Koi.ai Security Research. (2025). PackageGate: 6 zero-days in JS package managers.
+12. Node.js Project. (2025). Node.js release schedule and end-of-life dates.
+    nodejs.org/en/about/previous-releases
+13. Model Context Protocol. (2025). Security Policy and Trust Model.
+    github.com/modelcontextprotocol/modelcontextprotocol/security
+14. Anthropic. (2026, February 20). Making frontier cybersecurity capabilities
+    available to defenders (Claude Code Security launch).
+    anthropic.com/research/claude-code-security
+15. Node.js Project. (2026, January). OpenSSL Security Advisory Assessment,
+    January 2026. nodejs.org/en/blog/vulnerability/openssl-fixes-in-regular-releases-jan2026
